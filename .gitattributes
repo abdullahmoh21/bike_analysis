@@ -1,0 +1,2 @@
+2017-capitalbikeshare-tripdata/*.csv filter=lfs diff=lfs merge=lfs -text
+raw/2017-capitalbikeshare-tripdata/*.csv filter=lfs diff=lfs merge=lfs -text
