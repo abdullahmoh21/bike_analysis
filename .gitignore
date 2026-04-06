@@ -11,6 +11,7 @@ venv/
 
 # Generated data and outputs
 data/*.csv
+outputs/cleaned/*.csv
 outputs/figures/*.png
 outputs/tables/*.csv
 outputs/tables/*.json

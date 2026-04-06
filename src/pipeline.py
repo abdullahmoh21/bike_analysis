@@ -3,24 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
-from meteostat import Point
 from pandas.tseries.holiday import USFederalHolidayCalendar
 from sqlalchemy import create_engine, text
-
-try:
-    from meteostat import Hourly as LegacyHourly
-except ImportError:
-    LegacyHourly = None
-
-if LegacyHourly is None:
-    from meteostat.api.hourly import hourly as api_hourly
 
 
 TRIP_START_COLUMN_CANDIDATES = [
@@ -41,14 +31,8 @@ MEMBER_TYPE_COLUMN_CANDIDATES = [
     "rider type",
 ]
 
-WEATHER_COLUMNS = ["temp", "rhum", "wspd", "coco"]
+WEATHER_COLUMNS = ["temp", "rhum", "wspd"]
 EXPECTED_MEMBER_OTHER_RATIO = 0.05
-
-
-def fetch_hourly_from_meteostat(point: Point, start: datetime, end: datetime) -> pd.DataFrame:
-    if LegacyHourly is not None:
-        return LegacyHourly(point, start, end).fetch()
-    return api_hourly(point, start, end, timezone="America/New_York").fetch()
 
 
 def expected_hour_count(year: int) -> int:
@@ -79,28 +63,6 @@ def apparent_temperature(temp_c: pd.Series, rhum: pd.Series, wspd: pd.Series) ->
     # Steadman-style approximation with vapor pressure term.
     vapor_pressure = (rhum / 100.0) * 6.105 * np.exp((17.27 * temp_c) / (237.7 + temp_c))
     return temp_c + (0.33 * vapor_pressure) - (0.70 * wspd) - 4.0
-
-
-def validate_weather_cache(cache_df: pd.DataFrame, year: int) -> bool:
-    required = {"hour", *WEATHER_COLUMNS}
-    if not required.issubset(cache_df.columns):
-        return False
-
-    if cache_df["hour"].isna().any():
-        return False
-
-    expected_start = pd.Timestamp(f"{year}-01-01 00:00:00")
-    expected_end = pd.Timestamp(f"{year}-12-31 23:00:00")
-    if cache_df["hour"].min() > expected_start or cache_df["hour"].max() < expected_end:
-        return False
-
-    if cache_df["hour"].duplicated().any():
-        return False
-
-    if len(cache_df) < expected_hour_count(year):
-        return False
-
-    return True
 
 
 def normalize_column_name(name: str) -> str:
@@ -217,61 +179,56 @@ def load_all_trip_data(trip_dir: Path, chunksize: int, column_audit_path: Option
     return combined
 
 
-def fetch_weather_hourly(
-    year: int,
-    cache_path: Optional[Path] = None,
-    force_refresh: bool = False,
-) -> pd.DataFrame:
-    if cache_path is not None and cache_path.exists() and not force_refresh:
-        cached = pd.read_csv(cache_path, parse_dates=["hour"])
-        if validate_weather_cache(cached, year=year):
-            if "weather_quality_flag" not in cached.columns:
-                cached["weather_quality_flag"] = 0
-            if "weather_source" not in cached.columns:
-                cached["weather_source"] = "weather_cache_legacy"
-            return cached[["hour"] + WEATHER_COLUMNS + ["weather_quality_flag", "weather_source"]]
-        print("Weather cache failed validation. Fetching fresh weather data.")
+def load_noaa_weather(weather_csv: Path, year: int) -> pd.DataFrame:
+    """Load NOAA LCD CSV (Reagan National Airport) and return a clean hourly
+    weather DataFrame with columns: hour, temp, rhum, wspd,
+    weather_quality_flag, weather_source.
 
-    start = datetime(year, 1, 1, 0, 0, 0)
-    end = datetime(year, 12, 31, 23, 59, 59)
+    NOAA LCD contains multiple report types per timestamp (FM-15 METAR,
+    FM-12 SYNOP, FM-16 SPECI). We keep only FM-15 (routine hourly METAR)
+    to get one clean observation per hour, then LEFT JOIN onto the full
+    8,760-hour timeline and impute any gaps.
+    """
+    if not weather_csv.exists():
+        raise FileNotFoundError(
+            f"NOAA weather CSV not found: {weather_csv}\n"
+            "Download hourly LCD data for Reagan National Airport (WBAN 13743) "
+            "and place it at the path given by --weather-csv."
+        )
 
-    # Washington D.C. Reagan National Airport vicinity.
-    station_point = Point(38.8512, -77.0402, 4)
-    try:
-        weather = fetch_hourly_from_meteostat(station_point, start, end)
-    except Exception as exc:
-        raise RuntimeError(
-            "Failed to fetch weather from Meteostat. "
-            "If your environment blocks SSL/network traffic, generate or provide a local weather cache "
-            "via --weather-cache and rerun the pipeline."
-        ) from exc
+    df = pd.read_csv(weather_csv, low_memory=False)
 
-    if weather.empty:
-        raise RuntimeError("Meteostat returned no data for the requested year.")
+    # Keep only routine hourly METAR reports.
+    df = df[df["REPORT_TYPE"].str.strip() == "FM-15"].copy()
 
-    weather = weather.reset_index()
-    time_col = "time" if "time" in weather.columns else weather.columns[0]
-    weather = weather.rename(columns={time_col: "hour"})
-    weather["hour"] = pd.to_datetime(weather["hour"], errors="coerce")
+    df["hour"] = pd.to_datetime(df["DATE"], errors="coerce").dt.floor("h")
+    df = df.dropna(subset=["hour"])
 
-    if weather["hour"].dt.tz is not None:
-        weather["hour"] = weather["hour"].dt.tz_convert("America/New_York").dt.tz_localize(None)
+    # Strip trailing flag characters (e.g. "46s" → "46") before numeric conversion.
+    def clean_numeric(series: pd.Series) -> pd.Series:
+        return pd.to_numeric(
+            series.astype(str).str.replace(r"[^0-9.\-]", "", regex=True),
+            errors="coerce",
+        )
 
-    timeline = pd.DataFrame(
-        {
-            "hour": pd.date_range(
-                start=f"{year}-01-01 00:00:00",
-                end=f"{year}-12-31 23:00:00",
-                freq="h",
-            )
-        }
-    )
+    df["temp_f"] = clean_numeric(df["HourlyDryBulbTemperature"])
+    df["rhum"]   = clean_numeric(df["HourlyRelativeHumidity"])
+    df["wspd_mph"] = clean_numeric(df["HourlyWindSpeed"])
 
-    available_cols = [col for col in WEATHER_COLUMNS if col in weather.columns]
-    weather = timeline.merge(weather[["hour"] + available_cols], on="hour", how="left")
-    for col in WEATHER_COLUMNS:
-        if col not in weather.columns:
-            weather[col] = np.nan
+    df["temp"] = (df["temp_f"] - 32) * 5 / 9   # °F → °C
+    df["wspd"] = df["wspd_mph"] * 1.60934        # mph → km/h
+    # One observation per hour — take the first FM-15 within each floored hour.
+    df = df.sort_values("hour").drop_duplicates(subset=["hour"], keep="first")
+
+    # LEFT JOIN onto the complete year timeline so every hour is present.
+    timeline = pd.DataFrame({
+        "hour": pd.date_range(
+            start=f"{year}-01-01 00:00:00",
+            end=f"{year}-12-31 23:00:00",
+            freq="h",
+        )
+    })
+    weather = timeline.merge(df[["hour", "temp", "rhum", "wspd"]], on="hour", how="left")
 
     weather[WEATHER_COLUMNS] = weather[WEATHER_COLUMNS].apply(pd.to_numeric, errors="coerce")
     raw_missing = weather[WEATHER_COLUMNS].isna()
@@ -297,35 +254,9 @@ def fetch_weather_hourly(
 
     weather[WEATHER_COLUMNS] = filled
     weather["weather_quality_flag"] = quality_flag
-    weather["weather_source"] = "meteostat_api"
+    weather["weather_source"] = "noaa_lcd"
 
-    weather = weather[["hour"] + WEATHER_COLUMNS + ["weather_quality_flag", "weather_source"]]
-
-    if cache_path is not None:
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        weather.to_csv(cache_path, index=False)
-
-    return weather
-
-
-def season_from_month(month: int) -> str:
-    if month in (12, 1, 2):
-        return "winter"
-    if month in (3, 4, 5):
-        return "spring"
-    if month in (6, 7, 8):
-        return "summer"
-    return "fall"
-
-
-def time_of_day_bucket(hour: int) -> str:
-    if 6 <= hour < 10:
-        return "morning_rush"
-    if 10 <= hour < 16:
-        return "midday"
-    if 16 <= hour < 20:
-        return "evening_rush"
-    return "night"
+    return weather[["hour", "temp", "rhum", "wspd", "weather_quality_flag", "weather_source"]]
 
 
 def build_master_dataset(trips: pd.DataFrame, weather: pd.DataFrame) -> pd.DataFrame:
@@ -364,6 +295,26 @@ def build_master_dataset(trips: pd.DataFrame, weather: pd.DataFrame) -> pd.DataF
     return master.sort_values("hour").reset_index(drop=True)
 
 
+def season_from_month(month: int) -> str:
+    if month in (12, 1, 2):
+        return "winter"
+    if month in (3, 4, 5):
+        return "spring"
+    if month in (6, 7, 8):
+        return "summer"
+    return "fall"
+
+
+def time_of_day_bucket(hour: int) -> str:
+    if 6 <= hour < 10:
+        return "morning_rush"
+    if 10 <= hour < 16:
+        return "midday"
+    if 16 <= hour < 20:
+        return "evening_rush"
+    return "night"
+
+
 def create_quality_report(df: pd.DataFrame, year: int) -> Dict[str, Any]:
     expected_rows = expected_hour_count(year)
     duplicates = int(df["hour"].duplicated().sum())
@@ -392,8 +343,6 @@ def create_quality_report(df: pd.DataFrame, year: int) -> Dict[str, Any]:
         warnings.append(f"Expected {expected_rows} rows for {year}, got {len(df)}")
     if duplicates > 0:
         warnings.append(f"Found {duplicates} duplicate hours")
-    if df["coco"].nunique(dropna=False) <= 1:
-        warnings.append("Weather condition code (coco) is constant and likely non-informative")
     for metric, details in range_checks.items():
         if not details["in_range"]:
             warnings.append(f"{metric} has values outside expected range")
@@ -447,7 +396,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--trip-dir",
         type=str,
-        default="2017-capitalbikeshare-tripdata",
+        default="raw/2017-capitalbikeshare-tripdata",
         help="Directory containing quarterly Capital Bikeshare CSV files.",
     )
     parser.add_argument("--year", type=int, default=2017, help="Year to process.")
@@ -458,15 +407,10 @@ def parse_args() -> argparse.Namespace:
         help="CSV chunksize used while aggregating trip files.",
     )
     parser.add_argument(
-        "--weather-cache",
+        "--weather-csv",
         type=str,
-        default="data/weather_2017_hourly.csv",
-        help="CSV path for weather cache. Existing file will be reused.",
-    )
-    parser.add_argument(
-        "--force-refresh-weather",
-        action="store_true",
-        help="If set, ignore weather cache and fetch fresh weather data.",
+        default="raw/2017-DC-Hourly-Weather.csv",
+        help="Path to the raw NOAA LCD hourly weather CSV (Reagan National Airport).",
     )
     parser.add_argument(
         "--output-csv",
@@ -477,13 +421,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--quality-report",
         type=str,
-        default="outputs/tables/data_quality_report.json",
+        default="outputs/tables/pipeline/data_quality_report.json",
         help="Path for ETL data quality report JSON.",
     )
     parser.add_argument(
         "--column-audit",
         type=str,
-        default="outputs/tables/column_detection_log.json",
+        default="outputs/tables/pipeline/column_detection_log.json",
         help="Path for trip column detection audit JSON.",
     )
     parser.add_argument(
@@ -518,21 +462,28 @@ def main() -> None:
     args = parse_args()
 
     trip_dir = Path(args.trip_dir)
-    weather_cache = Path(args.weather_cache)
+    weather_csv = Path(args.weather_csv)
     output_csv = Path(args.output_csv)
     quality_report_path = Path(args.quality_report)
     column_audit_path = Path(args.column_audit)
+
+    cleaned_dir = Path("outputs/cleaned")
+    cleaned_dir.mkdir(parents=True, exist_ok=True)
 
     trips = load_all_trip_data(
         trip_dir=trip_dir,
         chunksize=args.chunksize,
         column_audit_path=column_audit_path,
     )
-    weather = fetch_weather_hourly(
-        year=args.year,
-        cache_path=weather_cache,
-        force_refresh=args.force_refresh_weather,
-    )
+    trips_out = cleaned_dir / "trips_2017_hourly_cleaned.csv"
+    trips.to_csv(trips_out, index=False)
+    print(f"Saved cleaned trip counts to: {trips_out}")
+
+    weather = load_noaa_weather(weather_csv=weather_csv, year=args.year)
+    weather_out = cleaned_dir / "weather_2017_hourly_cleaned.csv"
+    weather.to_csv(weather_out, index=False)
+    print(f"Saved cleaned weather to: {weather_out}")
+
     master = build_master_dataset(trips=trips, weather=weather)
     quality_report = create_quality_report(master, year=args.year)
     save_quality_report(quality_report, quality_report_path)

@@ -37,7 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tables-dir",
         type=str,
-        default="outputs/tables",
+        default="outputs/tables/eda",
         help="Directory where summary tables will be saved.",
     )
     return parser.parse_args()
@@ -71,23 +71,9 @@ def main() -> None:
     demand_by_hour = df.groupby("hour_of_day", as_index=False)["total_rentals"].mean()
     demand_by_hour.to_csv(tables_dir / "demand_by_hour.csv", index=False)
 
-    plt.figure(figsize=(10, 5))
-    sns.lineplot(data=demand_by_hour, x="hour_of_day", y="total_rentals", marker="o")
-    plt.title("Average Rentals by Hour of Day")
-    plt.xlabel("Hour of Day")
-    plt.ylabel("Average Rentals")
-    save_and_close(figures_dir / "average_rentals_by_hour.png")
-
     demand_by_day = df.groupby("day_of_week", as_index=False)["total_rentals"].mean()
     demand_by_day["day_label"] = demand_by_day["day_of_week"].map(DAY_LABELS)
     demand_by_day.to_csv(tables_dir / "demand_by_day_of_week.csv", index=False)
-
-    plt.figure(figsize=(9, 5))
-    sns.barplot(data=demand_by_day, x="day_label", y="total_rentals", hue="day_label", legend=False)
-    plt.title("Average Rentals by Day of Week")
-    plt.xlabel("Day")
-    plt.ylabel("Average Rentals")
-    save_and_close(figures_dir / "average_rentals_by_day_of_week.png")
 
     weekday_weekend = df.groupby(["is_weekend", "hour_of_day"], as_index=False)["total_rentals"].mean()
     weekday_weekend["day_type"] = weekday_weekend["is_weekend"].map({0: "Weekday", 1: "Weekend"})
@@ -120,21 +106,6 @@ def main() -> None:
     plt.ylabel("Total Rentals")
     save_and_close(figures_dir / "seasonal_user_mix.png")
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5), sharey=True)
-    sns.regplot(data=df, x="temp", y="total_rentals", scatter_kws={"alpha": 0.3, "s": 15}, ax=axes[0])
-    axes[0].set_title("Temperature vs Rentals")
-    axes[0].set_xlabel("Temperature (C)")
-    axes[0].set_ylabel("Rentals")
-
-    sns.regplot(data=df, x="rhum", y="total_rentals", scatter_kws={"alpha": 0.3, "s": 15}, ax=axes[1])
-    axes[1].set_title("Humidity vs Rentals")
-    axes[1].set_xlabel("Relative Humidity")
-
-    sns.regplot(data=df, x="wspd", y="total_rentals", scatter_kws={"alpha": 0.3, "s": 15}, ax=axes[2])
-    axes[2].set_title("Wind Speed vs Rentals")
-    axes[2].set_xlabel("Wind Speed (km/h)")
-    save_and_close(figures_dir / "weather_vs_rentals.png")
-
     corr_cols = [
         "total_rentals",
         "casual_count",
@@ -153,6 +124,51 @@ def main() -> None:
     sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap="Blues", square=True)
     plt.title("Correlation Matrix")
     save_and_close(figures_dir / "correlation_heatmap.png")
+
+    # ── Distribution plots ────────────────────────────────────────────────
+    # Rental demand distribution: reveals strong right skew (most hours are
+    # low-demand; a small number of peak hours drive the tail).
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    sns.histplot(df["total_rentals"], bins=60, kde=True, ax=axes[0], color="#374c80")
+    axes[0].set_title("Distribution of Hourly Total Rentals")
+    axes[0].set_xlabel("Total Rentals per Hour")
+    axes[0].set_ylabel("Frequency")
+
+    season_order = ["spring", "summer", "fall", "winter"]
+    sns.boxplot(
+        data=df,
+        x="season",
+        y="total_rentals",
+        order=season_order,
+        hue="season",
+        legend=False,
+        palette="Blues",
+        ax=axes[1],
+    )
+    axes[1].set_title("Hourly Rental Distribution by Season")
+    axes[1].set_xlabel("Season")
+    axes[1].set_ylabel("Total Rentals per Hour")
+    save_and_close(figures_dir / "rental_distributions.png")
+
+    # Weather variable distributions: confirms temp is roughly bimodal
+    # (reflecting D.C.'s cold winters and hot summers), rhum is left-skewed,
+    # and wind speed is right-skewed — justifying median imputation choices.
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
+    sns.histplot(df["temp"].dropna(), bins=40, kde=True, ax=axes[0], color="#5b8db8")
+    axes[0].set_title("Temperature Distribution")
+    axes[0].set_xlabel("Temperature (C)")
+    axes[0].set_ylabel("Hours")
+
+    sns.histplot(df["rhum"].dropna(), bins=40, kde=True, ax=axes[1], color="#5b8db8")
+    axes[1].set_title("Relative Humidity Distribution")
+    axes[1].set_xlabel("Relative Humidity (%)")
+    axes[1].set_ylabel("Hours")
+
+    sns.histplot(df["wspd"].dropna(), bins=40, kde=True, ax=axes[2], color="#5b8db8")
+    axes[2].set_title("Wind Speed Distribution")
+    axes[2].set_xlabel("Wind Speed (km/h)")
+    axes[2].set_ylabel("Hours")
+    save_and_close(figures_dir / "weather_variable_distributions.png")
 
     casual_registered_hourly = (
         df.groupby("hour_of_day", as_index=False)[["casual_count", "registered_count"]]

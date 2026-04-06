@@ -23,8 +23,8 @@ from sklearn.preprocessing import OneHotEncoder
 BASELINE_NUMERIC = ["temp", "hour_of_day", "atemp"]
 BASELINE_CATEGORICAL = ["season", "workingday"]
 
-IMPROVED_NUMERIC = ["temp", "atemp", "rhum", "wspd", "hour_of_day", "day_of_week", "is_weekend", "holiday"]
-IMPROVED_CATEGORICAL = ["season", "time_of_day", "workingday"]
+IMPROVED_NUMERIC = ["temp", "atemp", "rhum", "wspd", "hour_of_day", "day_of_week", "is_weekend", "holiday", "workingday"]
+IMPROVED_CATEGORICAL = ["season", "time_of_day"]
 
 TARGET = "total_rentals"
 
@@ -138,19 +138,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--metrics-json",
         type=str,
-        default="outputs/tables/model_metrics.json",
+        default="outputs/tables/modeling/model_metrics.json",
         help="Path for model metrics JSON.",
     )
     parser.add_argument(
         "--metrics-csv",
         type=str,
-        default="outputs/tables/model_metrics.csv",
+        default="outputs/tables/modeling/model_metrics.csv",
         help="Path for model metrics table CSV.",
     )
     parser.add_argument(
         "--predictions-csv",
         type=str,
-        default="outputs/tables/test_predictions.csv",
+        default="outputs/tables/modeling/test_predictions.csv",
         help="Path for test-set predictions CSV.",
     )
     parser.add_argument(
@@ -162,13 +162,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--residuals-csv",
         type=str,
-        default="outputs/tables/model_residuals.csv",
+        default="outputs/tables/modeling/model_residuals.csv",
         help="Path for residual diagnostics CSV.",
     )
     parser.add_argument(
         "--feature-importance-csv",
         type=str,
-        default="outputs/tables/random_forest_feature_importance.csv",
+        default="outputs/tables/modeling/random_forest_feature_importance.csv",
         help="Path for random forest feature importance CSV.",
     )
     parser.add_argument(
@@ -291,11 +291,13 @@ def main() -> None:
     ).sort_values("importance", ascending=False)
     importance_table.to_csv(importance_csv, index=False)
 
+    window = prediction_table.head(24 * 14)  # first 2 weeks of test set
+
     plt.figure(figsize=(11, 5))
-    plt.plot(prediction_table["hour"], prediction_table["actual"], label="Actual", linewidth=1.5)
-    plt.plot(prediction_table["hour"], prediction_table["baseline_prediction"], label="Baseline", linewidth=1)
-    plt.plot(prediction_table["hour"], prediction_table["improved_prediction"], label="Improved", linewidth=1)
-    plt.title("Actual vs Predicted Rentals (Chronological Test Window)")
+    plt.plot(window["hour"], window["actual"], label="Actual", linewidth=1.5)
+    plt.plot(window["hour"], window["baseline_prediction"], label="Baseline", linewidth=1)
+    plt.plot(window["hour"], window["improved_prediction"], label="Improved", linewidth=1)
+    plt.title("Actual vs Predicted Rentals — First 2 Weeks of Test Window (Hourly)")
     plt.xlabel("Hour")
     plt.ylabel("Total Rentals")
     plt.legend()

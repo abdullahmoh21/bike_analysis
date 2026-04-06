@@ -1,0 +1,53 @@
+{
+  "status": "pass",
+  "year": 2017,
+  "row_count": 8760,
+  "expected_row_count": 8760,
+  "duplicate_hours": 0,
+  "missing_by_column": {
+    "hour": 0,
+    "temp": 0,
+    "rhum": 0,
+    "wspd": 0,
+    "weather_quality_flag": 0,
+    "weather_source": 0,
+    "casual_count": 0,
+    "registered_count": 0,
+    "is_imputed_rides": 0,
+    "total_rentals": 0,
+    "hour_of_day": 0,
+    "day_of_week": 0,
+    "is_weekend": 0,
+    "month": 0,
+    "season": 0,
+    "season_code": 0,
+    "time_of_day": 0,
+    "quarter": 0,
+    "holiday": 0,
+    "workingday": 0,
+    "atemp": 0,
+    "run_generated_at": 0
+  },
+  "range_checks": {
+    "temp": {
+      "min": -9.444444444444445,
+      "max": 36.111111111111114,
+      "in_range": true
+    },
+    "rhum": {
+      "min": 13.0,
+      "max": 100.0,
+      "in_range": true
+    },
+    "wspd": {
+      "min": 0.0,
+      "max": 54.71756,
+      "in_range": true
+    }
+  },
+  "weather_quality_flag_distribution": {
+    "0": 8747,
+    "1": 13
+  },
+  "warnings": []
+}

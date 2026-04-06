@@ -1,0 +1,46 @@
+[
+  {
+    "trip_file": "2017Q1-capitalbikeshare-tripdata.csv",
+    "start_column": "Start date",
+    "member_column": "Member type",
+    "member_counts": {
+      "casual": 118076,
+      "registered": 528434,
+      "other": 0
+    },
+    "other_ratio": 0.0
+  },
+  {
+    "trip_file": "2017Q2-capitalbikeshare-tripdata.csv",
+    "start_column": "Start date",
+    "member_column": "Member type",
+    "member_counts": {
+      "casual": 341031,
+      "registered": 763387,
+      "other": 0
+    },
+    "other_ratio": 0.0
+  },
+  {
+    "trip_file": "2017Q3-capitalbikeshare-tripdata.csv",
+    "start_column": "Start date",
+    "member_column": "Member type",
+    "member_counts": {
+      "casual": 366390,
+      "registered": 825195,
+      "other": 0
+    },
+    "other_ratio": 0.0
+  },
+  {
+    "trip_file": "2017Q4-capitalbikeshare-tripdata.csv",
+    "start_column": "Start date",
+    "member_column": "Member type",
+    "member_counts": {
+      "casual": 156301,
+      "registered": 658963,
+      "other": 0
+    },
+    "other_ratio": 0.0
+  }
+]
